@@ -25,7 +25,7 @@ import json
 import math
 import os
 import random
-import six
+import pickle
 from tqdm import tqdm, trange
 
 import numpy as np
@@ -33,9 +33,10 @@ import torch
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
 from torch.utils.data.distributed import DistributedSampler
 
-import tokenization
-from modeling import BertConfig, BertForQuestionAnswering
-from optimization import BERTAdam
+from pytorch_pretrained_bert.tokenization import whitespace_tokenize, BasicTokenizer, BertTokenizer
+from pytorch_pretrained_bert.modeling import BertForQuestionAnswering
+from pytorch_pretrained_bert.optimization import BertAdam
+from pytorch_pretrained_bert.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
 
 logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(message)s', 
                     datefmt = '%m/%d/%Y %H:%M:%S',
@@ -65,9 +66,9 @@ class SquadExample(object):
 
     def __repr__(self):
         s = ""
-        s += "qas_id: %s" % (tokenization.printable_text(self.qas_id))
+        s += "qas_id: %s" % (self.qas_id)
         s += ", question_text: %s" % (
-            tokenization.printable_text(self.question_text))
+            self.question_text)
         s += ", doc_tokens: [%s]" % (" ".join(self.doc_tokens))
         if self.start_position:
             s += ", start_position: %d" % (self.start_position)
@@ -156,7 +157,7 @@ def read_squad_examples(input_file, is_training):
                     # guaranteed to be preserved.
                     actual_text = " ".join(doc_tokens[start_position:(end_position + 1)])
                     cleaned_answer_text = " ".join(
-                        tokenization.whitespace_tokenize(orig_answer_text))
+                        whitespace_tokenize(orig_answer_text))
                     if actual_text.find(cleaned_answer_text) == -1:
                         logger.warning("Could not find answer: '%s' vs. '%s'",
                                            actual_text, cleaned_answer_text)
@@ -289,12 +290,11 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
                 logger.info("unique_id: %s" % (unique_id))
                 logger.info("example_index: %s" % (example_index))
                 logger.info("doc_span_index: %s" % (doc_span_index))
-                logger.info("tokens: %s" % " ".join(
-                    [tokenization.printable_text(x) for x in tokens]))
-                logger.info("token_to_orig_map: %s" % " ".join(
-                    ["%d:%d" % (x, y) for (x, y) in six.iteritems(token_to_orig_map)]))
+                logger.info("tokens: %s" % " ".join(tokens))
+                logger.info("token_to_orig_map: %s" % " ".join([
+                    "%d:%d" % (x, y) for (x, y) in token_to_orig_map.items()]))
                 logger.info("token_is_max_context: %s" % " ".join([
-                    "%d:%s" % (x, y) for (x, y) in six.iteritems(token_is_max_context)
+                    "%d:%s" % (x, y) for (x, y) in token_is_max_context.items()
                 ]))
                 logger.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
                 logger.info(
@@ -306,7 +306,7 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
                     logger.info("start_position: %d" % (start_position))
                     logger.info("end_position: %d" % (end_position))
                     logger.info(
-                        "answer: %s" % (tokenization.printable_text(answer_text)))
+                        "answer: %s" % (answer_text))
 
             features.append(
                 InputFeatures(
@@ -582,7 +582,7 @@ def get_final_text(pred_text, orig_text, do_lower_case, verbose_logging=False):
     # and `pred_text`, and check if they are the same length. If they are
     # NOT the same length, the heuristic has failed. If they are the same
     # length, we assume the characters are one-to-one aligned.
-    tokenizer = tokenization.BasicTokenizer(do_lower_case=do_lower_case)
+    tokenizer = BasicTokenizer(do_lower_case=do_lower_case)
 
     tok_text = " ".join(tokenizer.tokenize(orig_text))
 
@@ -606,7 +606,7 @@ def get_final_text(pred_text, orig_text, do_lower_case, verbose_logging=False):
     # We then project the characters in `pred_text` back to `orig_text` using
     # the character-to-character alignment.
     tok_s_to_ns_map = {}
-    for (i, tok_index) in six.iteritems(tok_ns_to_s_map):
+    for (i, tok_index) in tok_ns_to_s_map.items():
         tok_s_to_ns_map[tok_index] = i
 
     orig_start_position = None
@@ -688,22 +688,23 @@ def set_optimizer_params_grad(named_params_optimizer, named_params_model, test_n
         if name_opti != name_model:
             logger.error("name_opti != name_model: {} {}".format(name_opti, name_model))
             raise ValueError
-        if test_nan and torch.isnan(param_model.grad).sum() > 0:
-            is_nan = True
-        if param_opti.grad is None:
-            param_opti.grad = torch.nn.Parameter(param_opti.data.new().resize_(*param_opti.data.size()))
-        param_opti.grad.data.copy_(param_model.grad.data)
+        if param_model.grad is not None:
+            if test_nan and torch.isnan(param_model.grad).sum() > 0:
+                is_nan = True
+            if param_opti.grad is None:
+                param_opti.grad = torch.nn.Parameter(param_opti.data.new().resize_(*param_opti.data.size()))
+            param_opti.grad.data.copy_(param_model.grad.data)
+        else:
+            param_opti.grad = None
     return is_nan
 
 def main():
     parser = argparse.ArgumentParser()
 
     ## Required parameters
-    parser.add_argument("--bert_config_file", default=None, type=str, required=True,
-                        help="The config json file corresponding to the pre-trained BERT model. "
-                             "This specifies the model architecture.")
-    parser.add_argument("--vocab_file", default=None, type=str, required=True,
-                        help="The vocabulary file that the BERT model was trained on.")
+    parser.add_argument("--bert_model", default=None, type=str, required=True,
+                        help="Bert pre-trained model selected in the list: bert-base-uncased, "
+                             "bert-large-uncased, bert-base-cased, bert-base-multilingual, bert-base-chinese.")
     parser.add_argument("--output_dir", default=None, type=str, required=True,
                         help="The output directory where the model checkpoints will be written.")
 
@@ -711,11 +712,6 @@ def main():
     parser.add_argument("--train_file", default=None, type=str, help="SQuAD json for training. E.g., train-v1.1.json")
     parser.add_argument("--predict_file", default=None, type=str,
                         help="SQuAD json for predictions. E.g., dev-v1.1.json or test-v1.1.json")
-    parser.add_argument("--init_checkpoint", default=None, type=str,
-                        help="Initial checkpoint (usually from a pre-trained BERT model).")
-    parser.add_argument("--do_lower_case", default=True, action='store_true',
-                        help="Whether to lower case the input text. Should be True for uncased "
-                             "models and False for cased models.")
     parser.add_argument("--max_seq_length", default=384, type=int,
                         help="The maximum total input sequence length after WordPiece tokenization. Sequences "
                              "longer than this will be truncated, and sequences shorter than this will be padded.")
@@ -734,10 +730,6 @@ def main():
     parser.add_argument("--warmup_proportion", default=0.1, type=float,
                         help="Proportion of training to perform linear learning rate warmup for. E.g., 0.1 = 10% "
                              "of training.")
-    parser.add_argument("--save_checkpoints_steps", default=1000, type=int,
-                        help="How often to save the model checkpoint.")
-    parser.add_argument("--iterations_per_loop", default=1000, type=int,
-                        help="How many steps to make in each estimator call.")
     parser.add_argument("--n_best_size", default=20, type=int,
                         help="The total number of n-best predictions to generate in the nbest_predictions.json "
                              "output file.")
@@ -759,6 +751,10 @@ def main():
                         type=int,
                         default=1,
                         help="Number of updates steps to accumulate before performing a backward/update pass.")
+    parser.add_argument("--do_lower_case",
+                        default=True,
+                        action='store_true',
+                        help="Whether to lower case the input text. True for uncased models, False for cased models.")
     parser.add_argument("--local_rank",
                         type=int,
                         default=-1,
@@ -815,20 +811,11 @@ def main():
             raise ValueError(
                 "If `do_predict` is True, then `predict_file` must be specified.")
 
-    bert_config = BertConfig.from_json_file(args.bert_config_file)
-
-    if args.max_seq_length > bert_config.max_position_embeddings:
-        raise ValueError(
-            "Cannot use sequence length %d because the BERT model "
-            "was only trained up to sequence length %d" %
-            (args.max_seq_length, bert_config.max_position_embeddings))
-
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir):
         raise ValueError("Output directory () already exists and is not empty.")
     os.makedirs(args.output_dir, exist_ok=True)
 
-    tokenizer = tokenization.FullTokenizer(
-        vocab_file=args.vocab_file, do_lower_case=args.do_lower_case)
+    tokenizer = BertTokenizer.from_pretrained(args.bert_model)
 
     train_examples = None
     num_train_steps = None
@@ -839,9 +826,8 @@ def main():
             len(train_examples) / args.train_batch_size / args.gradient_accumulation_steps * args.num_train_epochs)
 
     # Prepare model
-    model = BertForQuestionAnswering(bert_config)
-    if args.init_checkpoint is not None:
-        model.bert.load_state_dict(torch.load(args.init_checkpoint, map_location='cpu'))
+    model = BertForQuestionAnswering.from_pretrained(args.bert_model,
+                cache_dir=PYTORCH_PRETRAINED_BERT_CACHE / 'distributed_{}'.format(args.local_rank))
     if args.fp16:
         model.half()
     model.to(device)
@@ -862,23 +848,37 @@ def main():
         param_optimizer = list(model.named_parameters())
     no_decay = ['bias', 'gamma', 'beta']
     optimizer_grouped_parameters = [
-        {'params': [p for n, p in param_optimizer if n not in no_decay], 'weight_decay_rate': 0.01},
-        {'params': [p for n, p in param_optimizer if n in no_decay], 'weight_decay_rate': 0.0}
+        {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay_rate': 0.01},
+        {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay_rate': 0.0}
         ]
-    optimizer = BERTAdam(optimizer_grouped_parameters,
+    t_total = num_train_steps
+    if args.local_rank != -1:
+        t_total = t_total // torch.distributed.get_world_size()
+    optimizer = BertAdam(optimizer_grouped_parameters,
                          lr=args.learning_rate,
                          warmup=args.warmup_proportion,
-                         t_total=num_train_steps)
+                         t_total=t_total)
 
     global_step = 0
     if args.do_train:
-        train_features = convert_examples_to_features(
-            examples=train_examples,
-            tokenizer=tokenizer,
-            max_seq_length=args.max_seq_length,
-            doc_stride=args.doc_stride,
-            max_query_length=args.max_query_length,
-            is_training=True)
+        cached_train_features_file = args.train_file+'_{0}_{1}_{2}_{3}'.format(
+            args.bert_model, str(args.max_seq_length), str(args.doc_stride), str(args.max_query_length))
+        train_features = None
+        try:
+            with open(cached_train_features_file, "rb") as reader:
+                train_features = pickle.load(reader)
+        except:
+            train_features = convert_examples_to_features(
+                examples=train_examples,
+                tokenizer=tokenizer,
+                max_seq_length=args.max_seq_length,
+                doc_stride=args.doc_stride,
+                max_query_length=args.max_query_length,
+                is_training=True)
+            if args.local_rank == -1 or torch.distributed.get_rank() == 0:
+                logger.info("  Saving train features into cached file %s", cached_train_features_file)
+                with open(cached_train_features_file, "wb") as writer:
+                    train_features = pickle.dump(train_features, writer)
         logger.info("***** Running training *****")
         logger.info("  Num orig examples = %d", len(train_examples))
         logger.info("  Num split examples = %d", len(train_features))
@@ -918,7 +918,8 @@ def main():
                         if args.fp16 and args.loss_scale != 1.0:
                             # scale down gradients for fp16 training
                             for param in model.parameters():
-                                param.grad.data = param.grad.data / args.loss_scale
+                                if param.grad is not None:
+                                    param.grad.data = param.grad.data / args.loss_scale
                         is_nan = set_optimizer_params_grad(param_optimizer, model.named_parameters(), test_nan=True)
                         if is_nan:
                             logger.info("FP16 TRAINING: Nan in gradients, reducing loss scaling")
@@ -932,7 +933,7 @@ def main():
                     model.zero_grad()
                     global_step += 1
 
-    if args.do_predict:
+    if args.do_predict and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
         eval_examples = read_squad_examples(
             input_file=args.predict_file, is_training=False)
         eval_features = convert_examples_to_features(
@@ -953,10 +954,8 @@ def main():
         all_segment_ids = torch.tensor([f.segment_ids for f in eval_features], dtype=torch.long)
         all_example_index = torch.arange(all_input_ids.size(0), dtype=torch.long)
         eval_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_example_index)
-        if args.local_rank == -1:
-            eval_sampler = SequentialSampler(eval_data)
-        else:
-            eval_sampler = DistributedSampler(eval_data)
+        # Run prediction for full data
+        eval_sampler = SequentialSampler(eval_data)
         eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=args.predict_batch_size)
 
         model.eval()
