@@ -25,7 +25,7 @@ import tensorflow as tf
 import torch
 import numpy as np
 
-from .modeling import BertConfig, BertForPreTraining
+from pytorch_pretrained_bert.modeling import BertConfig, BertForPreTraining
 
 def convert_tf_checkpoint_to_pytorch(tf_checkpoint_path, bert_config_file, pytorch_dump_path):
     config_path = os.path.abspath(bert_config_file)
@@ -50,7 +50,7 @@ def convert_tf_checkpoint_to_pytorch(tf_checkpoint_path, bert_config_file, pytor
         name = name.split('/')
         # adam_v and adam_m are variables used in AdamWeightDecayOptimizer to calculated m and v
         # which are not required for using pretrained model
-        if name[-1] in ["adam_v", "adam_m"]:
+        if name[-1] in ["adam_v", "adam_m", "global_step"]:
             print("Skipping {}".format("/".join(name)))
             continue
         pointer = model
