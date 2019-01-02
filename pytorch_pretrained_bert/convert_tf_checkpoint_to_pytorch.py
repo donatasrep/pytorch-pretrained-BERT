@@ -52,6 +52,8 @@ def convert_tf_checkpoint_to_pytorch(tf_checkpoint_path, bert_config_file, pytor
         # which are not required for using pretrained model
         if any(n in ["adam_v", "adam_m", "global_step"] for n in name):
             print("Skipping {}".format("/".join(name)))
+            if any(n in ["global_step"] for n in name):
+                print("Global Step: {}".format(array))
             continue
         pointer = model
         for m_name in name:
