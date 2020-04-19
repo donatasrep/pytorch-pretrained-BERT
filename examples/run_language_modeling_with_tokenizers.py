@@ -140,13 +140,13 @@ class LineByLineTextDataset(Dataset):
             lines = [line for line in f.read().splitlines() if (len(line) > 0 and not line.isspace())]
 
         logger.info("Running tokenization")
-        self.examples = tokenizer.encode_batch(lines)["input_ids"]
+        self.examples = tokenizer.encode_batch(lines)
 
     def __len__(self):
         return len(self.examples)
 
     def __getitem__(self, i):
-        return torch.tensor(self.examples[i], dtype=torch.long)
+        return torch.tensor(self.examples[i].ids, dtype=torch.long)
 
 
 def load_and_cache_examples(args, tokenizer, evaluate=False):
