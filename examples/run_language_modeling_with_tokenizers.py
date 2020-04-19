@@ -126,8 +126,8 @@ class LineByLineTextDataset(Dataset):
             logger.info("Loading RoBERTa tokenizer")
 
             tokenizer = ByteLevelBPETokenizer(
-                os.path.join(args.tokenizer_name, "lt-vocab.json"),
-                os.path.join(args.tokenizer_name, "lt-merges.txt")
+                os.path.join(args.tokenizer_name, "vocab.json"),
+                os.path.join(args.tokenizer_name, "merges.txt")
             )
             tokenizer._tokenizer.post_processor = BertProcessing(
                 ("</s>", tokenizer.token_to_id("</s>")),
