@@ -140,7 +140,7 @@ class LineByLineTextDataset(Dataset):
             lines = [line for line in f.read().splitlines() if (len(line) > 0 and not line.isspace())]
 
         logger.info("Running tokenization")
-        self.examples = tokenizer.batch_encode_plus(lines, add_special_tokens=True, max_length=block_size)["input_ids"]
+        self.examples = tokenizer.batch_encode(lines)["input_ids"]
 
     def __len__(self):
         return len(self.examples)
